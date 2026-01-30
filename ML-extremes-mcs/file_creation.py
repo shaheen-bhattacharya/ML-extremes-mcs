@@ -34,7 +34,7 @@ class GenerateTrainData:
     """
 
     def __init__(self, main_path, start_year, end_year, variable=None,
-                 era5_directory='/glade/collections/rda/data/ds633.0/',
+                 era5_directory='/glade/campaign/collections/rda/data/d633000/',
                  mcs_directory=None, mask_var='cloudtracknumber'):
         """
         Initialization.

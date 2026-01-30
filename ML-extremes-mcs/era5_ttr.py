@@ -14,7 +14,7 @@ def era5_ttr_hourly(glob_string, variable, save_directory):
         save_directory (str): Directory where to save restructured ERA5 file.
     """
     # 2004 - 2019
-    filelist = sorted(glob.glob(glob_string))[(128 * 12)-1: -81] # this needs updating as time passes!
+    filelist = sorted(glob.glob(glob_string))[(128 * 12)-1: -131] # this needs updating as time passes!
 
     print('List assembled')
 
@@ -32,11 +32,14 @@ def era5_ttr_hourly(glob_string, variable, save_directory):
 
         tmp = ds.stack(time=['forecast_initial_time', 'forecast_hour'])
 
-        tmp = tmp.assign_coords(time=time_array)
+        tmp.encoding.clear()
+        tmp = tmp.drop_vars(["time", "forecast_initial_time", "forecast_hour"])
+        
+        tmp = tmp.assign_coords(time=time_array).set_index(time="time")
 
         # add negative sign due to flux pointing downwards in ERA5
         tmp['TTR'] = -tmp['TTR']
-
+        
         tmp.to_netcdf(save_directory+'/'+filename.split('/')[-1])
 
         print(filename.split('/')[-1], 'completed!')
