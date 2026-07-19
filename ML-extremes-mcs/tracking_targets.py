@@ -25,8 +25,6 @@ Design notes (verified against 2005 FLEXTRKR data):
   matrices themselves are returned unthresholded so a model can learn
   from the full overlap geometry.
 
-Author: Shaheen Bhattacharya, University of Maryland-College Park.
-
 """
 
 

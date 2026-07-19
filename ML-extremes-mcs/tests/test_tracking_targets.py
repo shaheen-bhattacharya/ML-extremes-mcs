@@ -20,8 +20,6 @@ integration tests run against real mcstrack files when a local
 sample_data/ directory is present (see repo README) and are skipped
 otherwise.
 
-Author: Shaheen Bhattacharya, University of Maryland-College Park.
-
 """
 
 SAMPLE_DIR = os.path.join(
