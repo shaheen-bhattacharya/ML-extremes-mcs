@@ -62,6 +62,27 @@ def test_consecutive_runs_stride_one(tmp_path):
     assert len(dt.consecutive_runs(paths, window=3)) == 2
 
 
+def test_consecutive_runs_stride(tmp_path):
+    paths = [write_mask(tmp_path, f'20050601_{h:02d}00', simple_mask(1))
+             for h in range(9)]
+    # stride = window - 1 = 2: windows tile so each hour-pair transition
+    # appears exactly once: [0,1,2], [2,3,4], [4,5,6], [6,7,8]
+    windows = dt.consecutive_runs(paths, window=3, stride=2)
+    starts = [os.path.basename(w[0])[9:22] for w in windows]
+    assert starts == ['20050601_0000', '20050601_0200',
+                      '20050601_0400', '20050601_0600']
+    # stride 3: non-overlapping tiling [0,1,2], [3,4,5], [6,7,8]
+    assert len(dt.consecutive_runs(paths, window=3, stride=3)) == 3
+    # stride survives a gap: reset happens regardless of stride phase
+    gappy = paths[:4] + paths[6:]
+    windows = dt.consecutive_runs(gappy, window=3, stride=2)
+    assert all(
+        dt.timestamp_of(w[2]) - dt.timestamp_of(w[0])
+        == __import__('datetime').timedelta(hours=2)
+        for w in windows
+    )
+
+
 def test_dataset_item_shapes(tmp_path):
     paths = [write_mask(tmp_path, f'20050601_{h:02d}00', simple_mask(7))
              for h in range(3)]

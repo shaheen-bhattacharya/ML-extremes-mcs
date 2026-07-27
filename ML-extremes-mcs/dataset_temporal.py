@@ -43,28 +43,37 @@ def timestamp_of(filepath):
     return datetime.datetime.strptime(name[9:22], '%Y%m%d_%H%M')
 
 
-def consecutive_runs(filepaths, window):
+def consecutive_runs(filepaths, window, stride=1):
     """
     Group time-sorted mask files into windows of consecutive hours.
     Args:
         filepaths (list): mcstrack file paths (any order).
         window (int): Number of consecutive hourly frames per window.
+        stride (int): Hours the window advances between samples within
+                      a consecutive run. 1 (default) yields maximally
+                      overlapping windows; window - 1 covers every
+                      hour-pair transition exactly once.
     Returns:
         List of window lists, each holding ``window`` file paths whose
-        timestamps are exactly one hour apart. Overlapping windows are
-        returned (stride 1), so a run of N consecutive files yields
-        N - window + 1 windows.
+        timestamps are exactly one hour apart. A run of N consecutive
+        files yields 1 + floor((N - window) / stride) windows.
     """
     files = sorted(filepaths, key=timestamp_of)
     out = []
     run = []
+    since_last = None
     for f in files:
         if run and (timestamp_of(f) - timestamp_of(run[-1])
                     != datetime.timedelta(hours=1)):
             run = []
+            since_last = None
         run.append(f)
         if len(run) >= window:
-            out.append(run[-window:])
+            if since_last is None or since_last >= stride:
+                out.append(run[-window:])
+                since_last = 1
+            else:
+                since_last += 1
     return out
 
 
@@ -83,7 +92,7 @@ class TemporalMaskDataset(Dataset):
     """
 
     def __init__(self, filepaths, window=3, msk_var='cloudtracknumber',
-                 min_frac=0.15):
+                 min_frac=0.15, stride=1):
         """
         Initialization.
         Args:
@@ -94,10 +103,12 @@ class TemporalMaskDataset(Dataset):
                            ``cloudtracknumber``.
             min_frac (float): Event-classification threshold passed to
                               tracking_targets.
+            stride (int): Window advance in hours; see
+                          consecutive_runs().
         """
         if window < 2:
             raise ValueError("window must be >= 2 to form target pairs.")
-        self.windows = consecutive_runs(filepaths, window)
+        self.windows = consecutive_runs(filepaths, window, stride=stride)
         self.window = window
         self.msk_var = msk_var
         self.min_frac = min_frac

@@ -65,7 +65,7 @@ class WindowsWithInputs(Dataset):
     """
 
     def __init__(self, mask_files, era5_dir, window=3, mean=None,
-                 std=None, difference=False):
+                 std=None, difference=False, stride=1):
         """
         Initialization.
         Args:
@@ -75,9 +75,11 @@ class WindowsWithInputs(Dataset):
             window (int): Frames per sample.
             mean, std (float): z-score constants for the input field.
             difference (bool): Passed to ERA5ForecastLoader.
+            stride (int): Window advance in hours (window - 1 covers
+                          each transition exactly once).
         """
         self.masks = dataset_temporal.TemporalMaskDataset(
-            mask_files, window=window
+            mask_files, window=window, stride=stride
         )
         self.era5_dir = era5_dir
         self.mean = mean
@@ -178,6 +180,9 @@ def main():
     p.add_argument('--train-years', default='2004-2015')
     p.add_argument('--valid-years', default='2016-2017')
     p.add_argument('--window', type=int, default=3)
+    p.add_argument('--stride', type=int, default=1,
+                   help='window advance in hours; window-1 covers each '
+                        'transition once (cheaper epochs)')
     p.add_argument('--epochs', type=int, default=10)
     p.add_argument('--lr', type=float, default=1e-4)
     p.add_argument('--lam', type=float, default=1.0,
@@ -218,9 +223,11 @@ def main():
         return
 
     train_ds = WindowsWithInputs(train_files, args.era5, args.window,
-                                 args.mean, args.std, args.difference)
+                                 args.mean, args.std, args.difference,
+                                 stride=args.stride)
     valid_ds = WindowsWithInputs(valid_files, args.era5, args.window,
-                                 args.mean, args.std, args.difference)
+                                 args.mean, args.std, args.difference,
+                                 stride=args.stride)
     print(f"train windows: {len(train_ds)} | valid windows: {len(valid_ds)}",
           flush=True)
 
