@@ -40,7 +40,7 @@ def build_archive(root):
     ]:
         inits = []
         t = start
-        while t <= end:
+        while t < end:   # end label is exclusive, matching d633000
             inits.append(t)
             t += datetime.timedelta(hours=12)
         data = np.zeros((len(inits), len(hours), len(lat), len(lon)),
@@ -92,6 +92,19 @@ def test_frame_reads_correct_forecast_slice(archive):
     # valid 2005-06-20 00:00 -> init 06-19 18Z, hour 6 (second chunk)
     f = ld.frame(datetime.datetime(2005, 6, 20, 0))
     assert np.allclose(f, 1918.06)
+
+
+def test_chunk_boundary_init(archive):
+    # regression: the init labeled as a chunk's END belongs to the NEXT
+    # chunk (2004-05-16 06Z KeyError found on real d633000 data).
+    ld = loader(archive)
+    # valid 06-16 07:00 -> init 06-16 06Z -> must load from chunk 2,
+    # whose encode value is day*100 + inithour + hour/100
+    f = ld.frame(datetime.datetime(2005, 6, 16, 7))
+    assert np.allclose(f, 1606.01)
+    # and the hour before the boundary still comes from chunk 1
+    f = ld.frame(datetime.datetime(2005, 6, 16, 6))   # init 06-15 18Z
+    assert np.allclose(f, 1518.12)
 
 
 def test_frame_orientation_and_bounds(archive):

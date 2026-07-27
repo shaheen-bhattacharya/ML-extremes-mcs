@@ -100,7 +100,9 @@ class ERA5ForecastLoader:
                     continue
                 start = datetime.datetime.strptime(m.group(1), '%Y%m%d%H')
                 end = datetime.datetime.strptime(m.group(2), '%Y%m%d%H')
-                if start <= init <= end:
+                # filename end is EXCLUSIVE: the end-labeled init lives
+                # in the next chunk (verified against d633000 files)
+                if start <= init < end:
                     return path
         raise FileNotFoundError(
             f"No {self.var} chunk file covering init {init} under "
