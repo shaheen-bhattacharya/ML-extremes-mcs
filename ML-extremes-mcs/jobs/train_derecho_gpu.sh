@@ -35,6 +35,18 @@ if [ "$MEAN" != "0" ] && [ "$STD" != "0" ]; then
     NORM_ARGS="--mean $MEAN --std $STD"
 fi
 
+# run configuration, overridable at submit time:
+#   qsub -v MEAN=...,STD=...,TRAIN_YEARS=2004-2007,STRIDE=2,EPOCHS=5 ...
+TRAIN_YEARS=${TRAIN_YEARS:-2004-2015}
+VALID_YEARS=${VALID_YEARS:-2016-2017}
+EPOCHS=${EPOCHS:-10}
+STRIDE=${STRIDE:-1}
+RESUME=${RESUME:-}
+RESUME_ARGS=""
+if [ -n "$RESUME" ]; then
+    RESUME_ARGS="--resume $RESUME"
+fi
+
 if [ -n "$SMOKE" ]; then
     python train_tracker.py --smoke \
         --mask-root "$MASK_ROOT" --era5 "$ERA5" --out "$OUT" \
@@ -42,6 +54,7 @@ if [ -n "$SMOKE" ]; then
 else
     python train_tracker.py \
         --mask-root "$MASK_ROOT" --era5 "$ERA5" --out "$OUT" \
-        --train-years 2004-2015 --valid-years 2016-2017 \
-        --epochs 10 --workers 8 $NORM_ARGS
+        --train-years "$TRAIN_YEARS" --valid-years "$VALID_YEARS" \
+        --epochs "$EPOCHS" --stride "$STRIDE" --workers 8 \
+        $NORM_ARGS $RESUME_ARGS
 fi
