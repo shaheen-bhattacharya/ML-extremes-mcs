@@ -6,6 +6,7 @@
 #PBS -l walltime=06:00:00
 #PBS -j oe
 #PBS -o mcs_tracker_v1.log
+#PBS -k oed
 
 # Training job for the v1 probabilistic tracker on Derecho GPU.
 #
