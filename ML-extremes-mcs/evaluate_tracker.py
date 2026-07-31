@@ -223,6 +223,9 @@ def main():
     p.add_argument('--std', type=float, default=None)
     p.add_argument('--difference', action='store_true')
     p.add_argument('--max-windows', type=int, default=None)
+    p.add_argument('--temporal-mixing', default='none',
+                   choices=['none', 'bottleneck'],
+                   help='must match the checkpoint being evaluated')
     p.add_argument('--out', default='eval_out')
     args = p.parse_args()
 
@@ -237,7 +240,9 @@ def main():
           flush=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    net = tracker_model.TrackerNet(n_channels=1, n_classes=2).to(device)
+    net = tracker_model.TrackerNet(
+        n_channels=1, n_classes=2, temporal_mixing=args.temporal_mixing
+    ).to(device)
     ck = torch.load(args.checkpoint, map_location=device)
     net.load_state_dict(ck['model'] if 'model' in ck else ck)
     print(f"loaded {args.checkpoint} (epoch {ck.get('epoch', '?')})",

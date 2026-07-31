@@ -194,6 +194,9 @@ def main():
     p.add_argument('--std', type=float, default=None)
     p.add_argument('--difference', action='store_true',
                    help='difference cumulative ERA5 accumulations')
+    p.add_argument('--temporal-mixing', default='none',
+                   choices=['none', 'bottleneck'],
+                   help="v1: 'none'; v1.5 ablation: 'bottleneck'")
     p.add_argument('--init-backbone', default=None,
                    help='optional unet state_dict to initialize from')
     p.add_argument('--resume', default=None, help='checkpoint to resume')
@@ -241,7 +244,10 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print('device:', device, flush=True)
-    net = tracker_model.TrackerNet(n_channels=1, n_classes=2).to(device)
+    net = tracker_model.TrackerNet(
+        n_channels=1, n_classes=2, temporal_mixing=args.temporal_mixing
+    ).to(device)
+    print('temporal mixing:', args.temporal_mixing, flush=True)
 
     if args.init_backbone:
         net.backbone.load_state_dict(

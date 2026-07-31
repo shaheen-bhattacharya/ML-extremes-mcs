@@ -126,6 +126,50 @@ class AssociationHead(nn.Module):
         return forward_mat, backward_mat
 
 
+class TemporalBottleneckAttention(nn.Module):
+    """
+    v1.5 temporal mixing: multi-head self-attention across the window's
+    frames at each spatial location of the U-Net bottleneck (temporal
+    only -- no spatial attention), applied residually with a LayerNorm
+    so an untrained block starts near the identity and v1 behavior is
+    recovered smoothly.
+    """
+
+    def __init__(self, channels=512, heads=8):
+        """
+        Initialization.
+        Args:
+            channels (int): Bottleneck feature channels.
+            heads (int): Attention heads.
+        """
+        super().__init__()
+        self.norm = nn.LayerNorm(channels)
+        self.attn = nn.MultiheadAttention(channels, heads,
+                                          batch_first=True)
+
+    def forward(self, x5, B, T):
+        """
+        Mix bottleneck features across time.
+        Args:
+            x5 (tensor): (B*T, C, h, w) bottleneck features.
+            B, T (int): Batch and window sizes for regrouping.
+        Returns:
+            (B*T, C, h, w) temporally mixed features.
+        """
+        BT, C, h, w = x5.shape
+        # (B*T, C, h, w) -> (B, T, C, h*w) -> (B, h*w, T, C) -> rows of
+        # length T for every (batch, location): attention across frames
+        seq = (x5.reshape(B, T, C, h * w)
+               .permute(0, 3, 1, 2)
+               .reshape(B * h * w, T, C))
+        mixed, _ = self.attn(self.norm(seq), self.norm(seq),
+                             self.norm(seq), need_weights=False)
+        seq = seq + mixed
+        return (seq.reshape(B, h * w, T, C)
+                .permute(0, 2, 3, 1)
+                .reshape(BT, C, h, w))
+
+
 class TrackerNet(nn.Module):
     """
     Shared U-Net backbone with segmentation and association heads.
@@ -133,10 +177,14 @@ class TrackerNet(nn.Module):
     Reuses the layers of an unet.UNet instance directly (rather than
     modifying unet.py) so backbone weights can be initialized from an
     existing trained segmentation checkpoint.
+
+    temporal_mixing='none' (v1) encodes frames independently;
+    'bottleneck' (v1.5) adds temporal self-attention at the U-Net
+    bottleneck so per-frame features see the window's other frames.
     """
 
     def __init__(self, n_channels=1, n_classes=2, bilinear=True,
-                 assoc_hidden=128):
+                 assoc_hidden=128, temporal_mixing='none'):
         """
         Initialization.
         Args:
@@ -144,19 +192,30 @@ class TrackerNet(nn.Module):
             n_classes (int): Segmentation classes. Defaults to 2.
             bilinear (bool): U-Net upsampling mode.
             assoc_hidden (int): Association MLP hidden width.
+            temporal_mixing (str): 'none' (v1) or 'bottleneck' (v1.5).
         """
         super().__init__()
+        if temporal_mixing not in ('none', 'bottleneck'):
+            raise ValueError(
+                "temporal_mixing must be 'none' or 'bottleneck'."
+            )
         self.backbone = unet.UNet(n_channels=n_channels,
                                   n_classes=n_classes, bilinear=bilinear)
         self.feat_dim = 64  # channels out of the U-Net's last Up block
         self.assoc = AssociationHead(emb_dim=self.feat_dim,
                                      hidden=assoc_hidden)
+        self.temporal_mixing = temporal_mixing
+        if temporal_mixing == 'bottleneck':
+            bottleneck_ch = 1024 // (2 if bilinear else 1)
+            self.mixer = TemporalBottleneckAttention(bottleneck_ch)
 
-    def encode(self, x):
+    def encode(self, x, B=None, T=None):
         """
         Run the U-Net, exposing penultimate features and seg logits.
         Args:
-            x (tensor): (batch, channels, lat, lon) single-frame input.
+            x (tensor): (batch, channels, lat, lon) frame batch; when
+                        temporal mixing is active, batch = B*T and the
+                        window grouping (B, T) must be provided.
         Returns:
             feats (tensor): (batch, 64, lat, lon) penultimate features.
             logits (tensor): (batch, n_classes, lat, lon) seg logits.
@@ -167,6 +226,8 @@ class TrackerNet(nn.Module):
         x3 = b.down2(x2)
         x4 = b.down3(x3)
         x5 = b.down4(x4)
+        if self.temporal_mixing == 'bottleneck' and T is not None and T > 1:
+            x5 = self.mixer(x5, B, T)
         y = b.up1(x5, x4)
         y = b.up2(y, x3)
         y = b.up3(y, x2)
@@ -175,7 +236,7 @@ class TrackerNet(nn.Module):
 
     def forward(self, x):
         """
-        Encode a temporal window, frames independent (v1).
+        Encode a temporal window.
         Args:
             x (tensor): (batch, window, channels, lat, lon).
         Returns:
@@ -183,7 +244,7 @@ class TrackerNet(nn.Module):
             logits (tensor): (batch, window, n_classes, lat, lon).
         """
         B, T, C, H, W = x.shape
-        feats, logits = self.encode(x.reshape(B * T, C, H, W))
+        feats, logits = self.encode(x.reshape(B * T, C, H, W), B=B, T=T)
         return (feats.reshape(B, T, -1, H, W),
                 logits.reshape(B, T, -1, H, W))
 

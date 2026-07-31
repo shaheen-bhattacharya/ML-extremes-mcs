@@ -143,3 +143,41 @@ def test_end_to_end_loss_backward():
                for p in net.assoc.parameters())
     assert any(p.grad is not None and p.grad.abs().sum() > 0
                for p in net.backbone.parameters())
+
+
+def test_temporal_mixing_shapes_and_gradients():
+    net = tm.TrackerNet(n_channels=1, n_classes=2,
+                        temporal_mixing='bottleneck')
+    x = torch.randn(2, 3, 1, H, W)
+    feats, logits = net(x)
+    assert feats.shape == (2, 3, 64, H, W)
+    assert logits.shape == (2, 3, 2, H, W)
+    logits.sum().backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0
+               for p in net.mixer.parameters())
+
+
+def test_temporal_mixing_frames_interact():
+    # with mixing, changing frame 0's input must change frame 1's
+    # features; without mixing it must not
+    torch.manual_seed(0)
+    x = torch.randn(1, 2, 1, H, W)
+    x2 = x.clone()
+    x2[0, 0] += 1.0
+
+    for mixing, should_change in [('bottleneck', True), ('none', False)]:
+        torch.manual_seed(1)
+        net = tm.TrackerNet(n_channels=1, n_classes=2,
+                            temporal_mixing=mixing)
+        net.eval()
+        with torch.no_grad():
+            f1, _ = net(x)
+            f2, _ = net(x2)
+        changed = bool((f1[0, 1] - f2[0, 1]).abs().max() > 1e-6)
+        assert changed == should_change, mixing
+
+
+def test_temporal_mixing_invalid_rejected():
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        tm.TrackerNet(temporal_mixing='wormhole')

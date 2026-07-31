@@ -42,6 +42,9 @@ TRAIN_YEARS=${TRAIN_YEARS:-2004-2015}
 VALID_YEARS=${VALID_YEARS:-2016-2017}
 EPOCHS=${EPOCHS:-10}
 STRIDE=${STRIDE:-1}
+MIXING=${MIXING:-none}
+RUN_NAME=${RUN_NAME:-v1}
+OUT=/glade/work/sbhatta/mcs_runs/$RUN_NAME
 RESUME=${RESUME:-}
 RESUME_ARGS=""
 if [ -n "$RESUME" ]; then
@@ -57,5 +60,6 @@ else
         --mask-root "$MASK_ROOT" --era5 "$ERA5" --out "$OUT" \
         --train-years "$TRAIN_YEARS" --valid-years "$VALID_YEARS" \
         --epochs "$EPOCHS" --stride "$STRIDE" --workers 8 \
+        --temporal-mixing "$MIXING" \
         $NORM_ARGS $RESUME_ARGS
 fi
