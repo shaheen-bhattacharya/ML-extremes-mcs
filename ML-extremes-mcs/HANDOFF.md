@@ -124,8 +124,34 @@ Monitoring: `qstat -u sbhatta`; job logs stream live (`-k oed` is set);
   0.955; **valid (2016) loss 0.513 / top-1 0.948**. Still improving at the
   last epoch — more epochs/years is easy upside. Checkpoints:
   `/glade/work/sbhatta/mcs_runs/v1/{best,last}.pt`.
-- **Evaluation on 2017**: job submitted 2026-07-31 (`eval_v1/`); produces
-  event-level P/R and the reliability diagram. [Record results here.]
+- **Evaluation of scout v1 on 2017** (eval_v1/, 2026-07-31): association
+  top-1 0.952, mean KL 0.056 (21,619 rows). Event F1 — continuation 0.96,
+  lysis 0.82, genesis 0.81, **split 0.19, merge 0.18** (recall ~0.5,
+  precision ~0.11 — over-predicts rare events ~4:1). **ECE 0.168**,
+  Brier 0.128 — not yet calibrated. Diagnosis: class imbalance (123 true
+  splits vs 10,050 continuations in 2017) + no post-hoc calibration.
+- **v1-full** (12 train years, 10 epochs, job 6965179, 5.5 GPU-h):
+  valid (2016) loss 0.502 / top-1 0.962 — better than scout. 2017 eval
+  pending (`eval_v1full/`). This is the paper-model candidate.
+- **v1.5 ablation** (job 6965180, matched to scout settings): valid
+  0.535 / 0.949 vs scout v1's 0.513 / 0.948 — **bottleneck temporal
+  attention gives no benefit** at these settings. Useful negative
+  result: justifies the simpler v1 architecture; deprioritizes v2.
+- Total GPU spend through all of the above: ~7.5 of 1,000 hours.
+
+### Priority remedies for the two weaknesses (in order)
+1. Evaluate v1-full on 2017 (likely free improvement on all metrics).
+2. **Temperature scaling** for calibration: single scalar T dividing the
+   association logits before softmax, fitted on validation (2016) to
+   minimize NLL/ECE, applied at eval. Standard, cheap, often halves ECE.
+3. **Rare-event reweighting**: upweight association-loss rows whose
+   target is a split/merge (e.g. weight rows with >=2 above-threshold
+   entries, or weight by 1/kind-frequency); alternatively raise --lam.
+   Retrain, re-evaluate split/merge F1.
+4. If split/merge F1 stays low after 2-3: paper narrows to calibrated
+   continuity/genesis/lysis with split/merge as characterized future
+   work — narrowing, not scrapping; the core result (learned
+   probabilistic association works) already stands.
 
 ## 7. What's next, in order, with specs
 
