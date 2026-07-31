@@ -108,7 +108,7 @@ class WindowsWithInputs(Dataset):
 
 
 def run_epoch(net, data, optimizer=None, lam=1.0, device='cpu',
-              accum=1, max_steps=None, log_every=50):
+              accum=1, max_steps=None, log_every=50, event_weight=1.0):
     """
     One pass over the data; trains when an optimizer is given.
     Returns:
@@ -144,7 +144,8 @@ def run_epoch(net, data, optimizer=None, lam=1.0, device='cpu',
                 pairs += agree.numel()
 
             loss = tracker_model.tracking_loss(
-                logits[0], binary, preds, targets, lam=lam
+                logits[0], binary, preds, targets, lam=lam,
+                event_weight=event_weight,
             )
 
         if training:
@@ -187,6 +188,9 @@ def main():
     p.add_argument('--lr', type=float, default=1e-4)
     p.add_argument('--lam', type=float, default=1.0,
                    help='association loss weight')
+    p.add_argument('--event-weight', type=float, default=1.0,
+                   help='upweighting for split/merge target rows in the '
+                        'association loss (1.0 = unweighted)')
     p.add_argument('--accum', type=int, default=8,
                    help='gradient accumulation steps')
     p.add_argument('--workers', type=int, default=4)
@@ -268,15 +272,19 @@ def main():
 
     if args.smoke:
         loss, top1 = run_epoch(net, train_dl, optimizer, args.lam, device,
-                               accum=2, max_steps=10, log_every=1)
+                               accum=2, max_steps=10, log_every=1,
+                               event_weight=args.event_weight)
         print(f"SMOKE OK  loss {loss:.4f}  assoc-top1 {top1:.3f}", flush=True)
         return
 
     for epoch in range(start_epoch, args.epochs):
         print(f"epoch {epoch}", flush=True)
         tr_loss, tr_top1 = run_epoch(net, train_dl, optimizer, args.lam,
-                                     device, accum=args.accum)
+                                     device, accum=args.accum,
+                                     event_weight=args.event_weight)
         with torch.no_grad():
+            # validation stays unweighted so loss numbers are
+            # comparable across event_weight settings
             va_loss, va_top1 = run_epoch(net, valid_dl, None, args.lam,
                                          device)
         print(f"epoch {epoch}  train {tr_loss:.4f}/{tr_top1:.3f}  "

@@ -181,3 +181,46 @@ def test_temporal_mixing_invalid_rejected():
     import pytest as _pytest
     with _pytest.raises(ValueError):
         tm.TrackerNet(temporal_mixing='wormhole')
+
+
+def test_split_merge_row_weights():
+    # row 0: continuation (one link); row 1: split (two links);
+    # row 2: lysis (dustbin only) -- only row 1 gets upweighted
+    target = torch.tensor([[0.9, 0.05, 0.05],
+                           [0.5, 0.45, 0.05],
+                           [0.05, 0.05, 0.9]])
+    w = tm.split_merge_row_weights(target, event_weight=50.0)
+    assert w.tolist() == [1.0, 50.0, 1.0]
+    # event_weight=1 reproduces uniform weights
+    assert tm.split_merge_row_weights(target, 1.0).tolist() == [1.0] * 3
+
+
+def test_weighted_kl_upweights_event_rows():
+    target = torch.tensor([[1.0, 0.0, 0.0],
+                           [0.5, 0.45, 0.05]])
+    # prediction perfect on the continuation row, wrong on the split row
+    pred = torch.tensor([[1.0, 0.0, 0.0],
+                         [0.9, 0.05, 0.05]])
+    w = tm.split_merge_row_weights(target, event_weight=50.0)
+    unweighted = tm.association_kl(pred.clone(), target)
+    weighted = tm.association_kl(pred.clone(), target, w)
+    # the only error is on the split row, so upweighting it must
+    # increase the mean loss substantially
+    assert weighted > unweighted * 1.5
+    # perfect prediction stays zero regardless of weighting
+    assert tm.association_kl(target.clone(), target, w) < 1e-6
+
+
+def test_tracking_loss_event_weight_threading():
+    H2, W2 = 32, 48
+    logits = torch.randn(2, 2, H2, W2)
+    binary = torch.zeros(2, H2, W2).long()
+    tgt = {'forward': torch.tensor([[0.5, 0.45, 0.05]]),
+           'backward': torch.tensor([[0.6, 0.4], [0.4, 0.6]])}
+    pred = (torch.tensor([[0.9, 0.05, 0.05]]),
+            torch.tensor([[0.5, 0.5], [0.5, 0.5]]))
+    base = tm.tracking_loss(logits, binary, [pred], [tgt],
+                            event_weight=1.0)
+    up = tm.tracking_loss(logits, binary, [pred], [tgt],
+                          event_weight=50.0)
+    assert up > base

@@ -283,13 +283,18 @@ def dice_loss(logits, target):
     return (1.0 - (2.0 * inter + 1.0) / (denom + 1.0)).mean()
 
 
-def association_kl(pred, target):
+def association_kl(pred, target, row_weights=None):
     """
     Row-wise KL divergence KL(target || pred) between assignment
     matrices (both row-stochastic, dustbin included).
     Args:
         pred (tensor): (n, m) predicted matrix from AssociationHead.
         target (tensor): (n, m) soft target from tracking_targets.
+        row_weights (tensor): Optional (n,) non-negative multipliers on
+            each row's KL before averaging over rows (NOT a normalized
+            weighted mean -- weights genuinely amplify, so an
+            upweighted rare-event row contributes more gradient even
+            when it is the only row in its matrix).
     Returns:
         Scalar mean KL over rows; 0 when pred equals target.
     """
@@ -299,11 +304,38 @@ def association_kl(pred, target):
     logp = torch.log(pred.clamp_min(1e-8))
     logt = torch.log(target.clamp_min(1e-8))
     kl = (target * (logt - logp)).sum(dim=1)
-    return kl.mean()
+    if row_weights is None:
+        return kl.mean()
+    return (row_weights.to(kl) * kl).mean()
+
+
+def split_merge_row_weights(target, event_weight, min_frac=0.15):
+    """
+    Row weights upweighting rare-event rows in an assignment target.
+
+    A row whose target places above-threshold mass on two or more real
+    (non-dustbin) columns describes a split (forward matrix) or merge
+    (backward matrix) -- the rare classes that an unweighted mean KL
+    starves of gradient (~1% of rows in the FLEXTRKR archive).
+
+    Args:
+        target (tensor): (n, m) row-stochastic target, dustbin last.
+        event_weight (float): Weight for split/merge rows; other rows
+            get 1. event_weight=1 reproduces the unweighted loss.
+        min_frac (float): Link threshold, matching tracking_targets.
+    Returns:
+        (n,) tensor of row weights.
+    """
+    if target.shape[0] == 0:
+        return target.new_zeros((0,))
+    links = (target[:, :-1] > min_frac).sum(dim=1)
+    return torch.where(links >= 2,
+                       target.new_full((), float(event_weight)),
+                       target.new_ones(()))
 
 
 def tracking_loss(logits, binary_masks, assoc_preds, assoc_targets,
-                  lam=1.0):
+                  lam=1.0, event_weight=1.0, min_frac=0.15):
     """
     Combined detection + association loss for one window.
     Args:
@@ -313,6 +345,9 @@ def tracking_loss(logits, binary_masks, assoc_preds, assoc_targets,
         assoc_targets (list): Per-pair target dicts from
                               dataset_temporal (forward/backward keys).
         lam (float): Weight of the association term.
+        event_weight (float): Upweighting for split/merge target rows
+            (see split_merge_row_weights). 1.0 = unweighted.
+        min_frac (float): Link threshold for identifying event rows.
     Returns:
         Scalar total loss.
     """
@@ -320,8 +355,14 @@ def tracking_loss(logits, binary_masks, assoc_preds, assoc_targets,
            + dice_loss(logits, binary_masks))
     assoc = logits.new_zeros(())
     for (fwd, bwd), tgt in zip(assoc_preds, assoc_targets):
-        assoc = assoc + association_kl(fwd, tgt['forward'].to(fwd))
-        assoc = assoc + association_kl(bwd, tgt['backward'].to(bwd))
+        tf = tgt['forward'].to(fwd)
+        tb = tgt['backward'].to(bwd)
+        wf = wb = None
+        if event_weight != 1.0:
+            wf = split_merge_row_weights(tf, event_weight, min_frac)
+            wb = split_merge_row_weights(tb, event_weight, min_frac)
+        assoc = assoc + association_kl(fwd, tf, wf)
+        assoc = assoc + association_kl(bwd, tb, wb)
     if assoc_preds:
         assoc = assoc / len(assoc_preds)
     return seg + lam * assoc
