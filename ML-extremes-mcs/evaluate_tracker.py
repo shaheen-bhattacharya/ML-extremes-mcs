@@ -164,9 +164,13 @@ def reliability_figure(probs, outcomes, path, n_bins=10):
     return ece, brier
 
 
-def evaluate(net, dataset, device='cpu', max_windows=None, min_frac=0.15):
+def evaluate(net, dataset, device='cpu', max_windows=None, min_frac=0.15,
+             temperature=1.0):
     """
     Run teacher-forced evaluation over a dataset of windows.
+    Args:
+        temperature (float): Softmax temperature applied to association
+            logits (fit on validation via --fit-temperature; 1.0 = raw).
     Returns:
         Dict of association metrics, event scores, and calibration
         arrays (probs/outcomes kept for figure generation).
@@ -187,7 +191,8 @@ def evaluate(net, dataset, device='cpu', max_windows=None, min_frac=0.15):
                 if not tgt['ids_t0'] and not tgt['ids_t1']:
                     continue
                 ids0, ids1, pf, pb = net.associate(
-                    feats[0, k], feats[0, k + 1], track[k], track[k + 1]
+                    feats[0, k], feats[0, k + 1], track[k], track[k + 1],
+                    temperature=temperature,
                 )
                 preds.append((pf, pb))
                 targets.append(tgt)
@@ -211,6 +216,51 @@ def evaluate(net, dataset, device='cpu', max_windows=None, min_frac=0.15):
             'n_windows': n, 'n_pairs': len(preds)}
 
 
+def fit_temperature(net, dataset, device='cpu', max_windows=300,
+                    min_frac=0.15,
+                    grid=(0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
+                          1.0, 1.2, 1.5)):
+    """
+    Grid-search the softmax temperature minimizing ECE on a (validation)
+    dataset. The expensive U-Net encoding runs once per window; the
+    cheap association head is re-run per candidate temperature.
+    Returns:
+        (best_T, {T: ece}) with diagnostics printed per grid point.
+    """
+    net.eval()
+    per_t = {t: ([], []) for t in grid}
+    n = min(max_windows, len(dataset))
+    with torch.no_grad():
+        for w in range(n):
+            item = dataset[w]
+            x = train_tracker.pad_lat(item['inputs']).unsqueeze(0).to(device)
+            track = train_tracker.pad_lat(item['track_masks']).to(device)
+            feats, _ = net(x)
+            for k, tgt in enumerate(item['targets']):
+                if not tgt['ids_t0'] and not tgt['ids_t1']:
+                    continue
+                for t in grid:
+                    _, _, pf, pb = net.associate(
+                        feats[0, k], feats[0, k + 1],
+                        track[k], track[k + 1], temperature=t,
+                    )
+                    p, o = calibration_data([(pf, pb)], [tgt], min_frac)
+                    if p.size:
+                        per_t[t][0].append(p)
+                        per_t[t][1].append(o)
+
+    eces = {}
+    for t in grid:
+        probs = np.concatenate(per_t[t][0])
+        outs = np.concatenate(per_t[t][1])
+        ece, brier, *_ = expected_calibration_error(probs, outs)
+        eces[t] = ece
+        print(f"  T={t:.2f}  ECE {ece:.4f}  Brier {brier:.4f}", flush=True)
+    best = min(eces, key=eces.get)
+    print(f"best temperature: {best} (ECE {eces[best]:.4f})", flush=True)
+    return best, eces
+
+
 def main():
     p = argparse.ArgumentParser(description='Evaluate a tracker checkpoint.')
     p.add_argument('--checkpoint', required=True)
@@ -226,6 +276,12 @@ def main():
     p.add_argument('--temporal-mixing', default='none',
                    choices=['none', 'bottleneck'],
                    help='must match the checkpoint being evaluated')
+    p.add_argument('--temperature', type=float, default=1.0,
+                   help='softmax temperature for association logits '
+                        '(fit on validation via --fit-temperature)')
+    p.add_argument('--fit-temperature', action='store_true',
+                   help='grid-search T minimizing ECE on --years '
+                        '(use validation years!), print best, exit')
     p.add_argument('--out', default='eval_out')
     args = p.parse_args()
 
@@ -248,7 +304,13 @@ def main():
     print(f"loaded {args.checkpoint} (epoch {ck.get('epoch', '?')})",
           flush=True)
 
-    res = evaluate(net, dataset, device, args.max_windows)
+    if args.fit_temperature:
+        fit_temperature(net, dataset, device,
+                        max_windows=args.max_windows or 300)
+        return
+
+    res = evaluate(net, dataset, device, args.max_windows,
+                   temperature=args.temperature)
 
     os.makedirs(args.out, exist_ok=True)
     ece, brier = reliability_figure(
@@ -259,6 +321,7 @@ def main():
     summary = {'association': res['association'],
                'events': res['events'],
                'ece': ece, 'brier': brier,
+               'temperature': args.temperature,
                'n_windows': res['n_windows'],
                'n_pairs': res['n_pairs'],
                'checkpoint': args.checkpoint, 'years': args.years}

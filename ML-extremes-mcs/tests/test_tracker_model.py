@@ -224,3 +224,24 @@ def test_tracking_loss_event_weight_threading():
     up = tm.tracking_loss(logits, binary, [pred], [tgt],
                           event_weight=50.0)
     assert up > base
+
+
+def test_temperature_sharpens_distributions():
+    head = tm.AssociationHead(emb_dim=8, hidden=16)
+    emb0, emb1 = torch.randn(2, 8), torch.randn(3, 8)
+    cent0, cent1 = torch.rand(2, 2), torch.rand(3, 2)
+    area0, area1 = torch.ones(2) * 40, torch.ones(3) * 60
+
+    f1, b1 = head(emb0, cent0, area0, emb1, cent1, area1, temperature=1.0)
+    fs, bs = head(emb0, cent0, area0, emb1, cent1, area1, temperature=0.3)
+    ff, bf = head(emb0, cent0, area0, emb1, cent1, area1, temperature=3.0)
+
+    # rows remain distributions at any temperature
+    for m in (f1, fs, ff, b1, bs, bf):
+        assert torch.allclose(m.sum(dim=1), torch.ones(m.shape[0]),
+                              atol=1e-5)
+    # T<1 sharpens (higher max prob per row); T>1 flattens
+    assert (fs.max(dim=1).values >= f1.max(dim=1).values - 1e-6).all()
+    assert (ff.max(dim=1).values <= f1.max(dim=1).values + 1e-6).all()
+    # argmax (top-1 behavior) is temperature-invariant
+    assert (fs.argmax(dim=1) == f1.argmax(dim=1)).all()

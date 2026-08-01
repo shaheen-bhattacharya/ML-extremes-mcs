@@ -109,9 +109,16 @@ class AssociationHead(nn.Module):
         feats = torch.cat([e0, e1, offset, logratio], dim=-1)
         return self.pair_mlp(feats).squeeze(-1)
 
-    def forward(self, emb0, cent0, area0, emb1, cent1, area1):
+    def forward(self, emb0, cent0, area0, emb1, cent1, area1,
+                temperature=1.0):
         """
         Predict assignment matrices for one consecutive-frame pair.
+        Args:
+            temperature (float): Softmax temperature; logits are divided
+                by it before normalization. T=1 leaves training-time
+                behavior unchanged; T<1 sharpens distributions (the
+                post-hoc calibration fix for an under-confident model),
+                T>1 flattens them. Fit on validation, apply at eval.
         Returns:
             forward_mat (tensor): (n0, n1 + 1) rows sum to 1; last
                                   column is the dissipation dustbin.
@@ -121,8 +128,10 @@ class AssociationHead(nn.Module):
         scores = self.pair_scores(emb0, cent0, area0, emb1, cent1, area1)
         bin0 = self.dustbin_mlp(emb0) if emb0.shape[0] else emb0.new_zeros((0, 1))
         bin1 = self.dustbin_mlp(emb1) if emb1.shape[0] else emb1.new_zeros((0, 1))
-        forward_mat = torch.softmax(torch.cat([scores, bin0], dim=1), dim=1)
-        backward_mat = torch.softmax(torch.cat([scores.t(), bin1], dim=1), dim=1)
+        forward_mat = torch.softmax(
+            torch.cat([scores, bin0], dim=1) / temperature, dim=1)
+        backward_mat = torch.softmax(
+            torch.cat([scores.t(), bin1], dim=1) / temperature, dim=1)
         return forward_mat, backward_mat
 
 
@@ -248,7 +257,8 @@ class TrackerNet(nn.Module):
         return (feats.reshape(B, T, -1, H, W),
                 logits.reshape(B, T, -1, H, W))
 
-    def associate(self, feats_t0, feats_t1, mask_t0, mask_t1):
+    def associate(self, feats_t0, feats_t1, mask_t0, mask_t1,
+                  temperature=1.0):
         """
         Predict assignment matrices for one frame pair using known
         storm footprints (ground-truth masks during teacher-forced
@@ -256,6 +266,7 @@ class TrackerNet(nn.Module):
         Args:
             feats_t0, feats_t1 (tensor): (64, lat, lon) frame features.
             mask_t0, mask_t1: (lat, lon) integer track masks.
+            temperature (float): See AssociationHead.forward.
         Returns:
             ids_t0, ids_t1 (list): Storm IDs, row/column order of the
                                    matrices.
@@ -263,7 +274,8 @@ class TrackerNet(nn.Module):
         """
         ids0, emb0, cent0, area0 = mask_pool(feats_t0, mask_t0)
         ids1, emb1, cent1, area1 = mask_pool(feats_t1, mask_t1)
-        fwd, bwd = self.assoc(emb0, cent0, area0, emb1, cent1, area1)
+        fwd, bwd = self.assoc(emb0, cent0, area0, emb1, cent1, area1,
+                              temperature=temperature)
         return ids0, ids1, fwd, bwd
 
 
