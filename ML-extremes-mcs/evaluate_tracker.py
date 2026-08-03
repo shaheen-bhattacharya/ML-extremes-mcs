@@ -85,13 +85,23 @@ def event_scores(pred_events, true_events):
     return out
 
 
-def calibration_data(preds, targets, min_frac=0.15):
+def calibration_data(preds, targets, min_frac=None):
     """
-    Collect (predicted probability, binary outcome) pairs for every
-    matrix cell, dustbins included.
+    Collect (predicted probability, target mass) pairs for every matrix
+    cell, dustbins included.
+
+    Outcomes are the SOFT target masses, not thresholded booleans: the
+    targets are overlap fractions, and per the proper-scoring-rule
+    argument the model estimates their conditional mean -- so
+    calibration means E[target | prediction = p] = p. (An earlier
+    version binarized targets at 0.15, which manufactured apparent
+    under-confidence -- a correct prediction of a 0.2-mass overlap was
+    scored against an "outcome" of 1.0 -- and made ECE insensitive to
+    both the model and the softmax temperature.)
+
     Args:
         preds, targets: As in association_metrics().
-        min_frac (float): Threshold defining a true link outcome.
+        min_frac: Unused; retained for call-site compatibility.
     Returns:
         (probs, outcomes) float arrays of equal length.
     """
@@ -103,7 +113,7 @@ def calibration_data(preds, targets, min_frac=0.15):
             if p.size == 0:
                 continue
             probs.append(p.ravel())
-            outs.append((t > min_frac).ravel().astype(float))
+            outs.append(np.clip(t, 0.0, 1.0).ravel())
     if not probs:
         return np.array([]), np.array([])
     return np.concatenate(probs), np.concatenate(outs)
@@ -151,7 +161,7 @@ def reliability_figure(probs, outcomes, path, n_bins=10):
     )
     ax.plot([0, 1], [0, 1], 'k--', lw=1, label='perfect calibration')
     ax.plot(conf, acc, 'o-', color='#1a6a9a', label='model')
-    ax.set_ylabel('observed link frequency')
+    ax.set_ylabel('mean observed target mass')
     ax.set_title(f'Reliability — ECE {ece:.3f}, Brier {brier:.3f}')
     ax.legend(loc='upper left')
     hx.bar(centers, count, width=0.08, color='#1a6a9a')

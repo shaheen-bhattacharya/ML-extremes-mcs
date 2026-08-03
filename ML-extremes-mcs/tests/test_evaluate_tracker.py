@@ -64,13 +64,16 @@ def test_calibration_perfect_and_ece():
     assert ece2 > 0.4
 
 
-def test_calibration_data_shapes():
+def test_calibration_data_soft_outcomes():
     t = {'forward': rows([0.7, 0.2, 0.1]), 'backward': rows([1.0, 0.0])}
     preds = [(t['forward'].clone(), t['backward'].clone())]
     probs, outs = ev.calibration_data(preds, [t])
     assert probs.shape == outs.shape == (5,)
-    # target masses above 0.15 count as true links: 0.7, 0.2, 1.0
-    assert outs.sum() == 3
+    # outcomes are the soft target masses themselves, NOT thresholded
+    assert np.allclose(sorted(outs), [0.0, 0.1, 0.2, 0.7, 1.0])
+    # a model predicting exactly the targets is perfectly calibrated
+    ece, *_ = ev.expected_calibration_error(probs, outs)
+    assert ece < 1e-6
 
 
 def test_reliability_figure_writes(tmp_path):
