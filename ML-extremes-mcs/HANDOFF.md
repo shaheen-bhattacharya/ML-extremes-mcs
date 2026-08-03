@@ -139,6 +139,35 @@ Monitoring: `qstat -u sbhatta`; job logs stream live (`-k oed` is set);
   result: justifies the simpler v1 architecture; deprioritizes v2.
 - Total GPU spend through all of the above: ~7.5 of 1,000 hours.
 
+### Resolved since (2026-08-01..03)
+- **Weight sweep = negative result**: w∈{10,30,100} raised split recall
+  (0.46→0.68) but collapsed precision faster; F1 fell at every w.
+  Reweighting teaches over-prediction, not discrimination; scale
+  (v1-full) improved precision AND recall together. Final recipe: w=1.
+- **v1-full on 2017**: top-1 0.960, KL 0.039; F1 continuation 0.973 /
+  genesis 0.881 / lysis 0.867 / split 0.281 / merge 0.277.
+- **Calibration metric bug found and fixed**: outcomes were binarized
+  at 0.15, manufacturing fake under-confidence and model/temperature-
+  insensitive ECE (identical to 6 decimals across models; bit-identical
+  across T=0.4..1.0). Fixed to score against soft target masses (the
+  conditional-mean property KL optimizes). With the honest metric:
+  **fitted T = 1.0 (no correction needed), validation ECE 0.0122,
+  held-out 2017 ECE 0.0053** — the model is well-calibrated as
+  trained; Lemma 3's prediction empirically confirmed. Temperature
+  scaling (PR #9) retained as the tool that established this.
+- **Split/merge reframe**: with calibration proven, low split/merge
+  precision is largely the hard event classifier penalizing honest
+  hedges (calibrated ambiguity forced into binary labels scored against
+  FLEXTRKR's arbitrary tie-breaks). Discussion-section material, plus a
+  possible separate event-labeling threshold for predictions.
+- **One-hour labeling offset in the legacy pipeline**: user's Jan 2026
+  per-ID files (~/data/ttr, IDs 0-7051) match the new loader EXACTLY at
+  t+1h — legacy era5_ttr flattening labels accumulation intervals by
+  START hour vs ECMWF/RDA END-hour convention. Our models unaffected
+  (consistent convention); legacy-trained models (incl. DYAMOND
+  1-channel) paired mask(t) with atmosphere (t,t+1]. Loader thereby
+  independently cross-validated against 7,052 files.
+
 ### Priority remedies for the two weaknesses (in order)
 1. Evaluate v1-full on 2017 (likely free improvement on all metrics).
 2. **Temperature scaling** for calibration: single scalar T dividing the
