@@ -189,3 +189,122 @@ class ERA5ForecastLoader:
         mean = acc / n
         var = acc2 / n - mean ** 2
         return float(mean), float(np.sqrt(max(var, 0.0)))
+
+
+class ERA5AnalysisLoader(ERA5ForecastLoader):
+    """
+    Loader for ERA5 *analysis* tables (e5.oper.an.sfc, e5.oper.an.pl):
+    instantaneous snapshots on a plain hourly time axis, stored as
+    monthly (surface) or daily (pressure-level) files whose filename
+    date ranges are END-INCLUSIVE (...YYYYMM0100_YYYYMMDD23.nc covers
+    hour 23). Pressure-level variables additionally select a level.
+
+    Simpler than the forecast loader (no init/hour decomposition);
+    inherits the spatial slicing/flip, normalization, and window/
+    compute_stats interfaces so channels from both loader types can be
+    stacked interchangeably.
+    """
+
+    def __init__(self, archive_dir, var, file_glob, level=None,
+                 lat_bounds=(20.0, 50.0), lon_bounds=(220.0, 300.0),
+                 negate=False, mean=None, std=None):
+        """
+        Initialization.
+        Args:
+            archive_dir (str): Table directory containing YYYYMM
+                               subdirectories (e.g., .../e5.oper.an.sfc/).
+            var (str): Variable name inside the files (e.g., 'CAPE', 'U').
+            file_glob (str): Filename pattern (e.g., '*_cape.*.nc',
+                             '*128_131_u.*.nc').
+            level (float): Pressure level in hPa for an.pl tables
+                           (e.g., 850); None for surface tables.
+            negate (bool): Defaults False (unlike TTR, analysis fields
+                           are used as stored).
+            Remaining args as in ERA5ForecastLoader.
+        """
+        super().__init__(archive_dir, var=var, file_glob=file_glob,
+                         lat_bounds=lat_bounds, lon_bounds=lon_bounds,
+                         negate=negate, difference=False,
+                         mean=mean, std=std)
+        self.level = level
+
+    def _file_for_time(self, valid):
+        """
+        Locate the analysis file whose (end-inclusive) filename range
+        contains the valid time.
+        """
+        month_dir = valid.strftime('%Y%m')
+        pattern = os.path.join(self.archive_dir, month_dir, self.file_glob)
+        for path in sorted(glob.glob(pattern)):
+            m = re.search(r'\.(\d{10})_(\d{10})\.nc$', path)
+            if not m:
+                continue
+            start = datetime.datetime.strptime(m.group(1), '%Y%m%d%H')
+            end = datetime.datetime.strptime(m.group(2), '%Y%m%d%H')
+            if start <= valid <= end:   # analysis ranges are inclusive
+                return path
+        raise FileNotFoundError(
+            f"No {self.var} analysis file covering {valid} under "
+            f"{self.archive_dir}"
+        )
+
+    def frame(self, valid):
+        """
+        Load one mask-aligned field at a valid time.
+        Args:
+            valid (datetime.datetime): Valid time (whole hours).
+        Returns:
+            2d numpy array (lat ascending, lon), aligned to the mask grid.
+        """
+        ds = self._open(self._file_for_time(valid))
+        da = ds[self.var].sel(time=valid)
+        if self.level is not None:
+            da = da.sel(level=self.level)
+
+        south, north = self.lat_bounds
+        west, east = self.lon_bounds
+        da = da.sel(latitude=slice(north, south),
+                    longitude=slice(west, east))
+        out = da.values[::-1, :].astype(np.float32)
+
+        if self.negate:
+            out = -out
+        if self.mean is not None and self.std is not None:
+            out = (out - self.mean) / self.std
+        return out
+
+
+class MultiChannelLoader:
+    """
+    Stacks frames from several loaders (forecast and/or analysis) into
+    multi-channel windows, so a TrackerNet with n_channels > 1 can take
+    e.g. [OLR, CAPE, u850, v850] per frame. Presents the same window()
+    interface as a single loader.
+    """
+
+    def __init__(self, loaders):
+        """
+        Initialization.
+        Args:
+            loaders (list): Loader instances in channel order; each must
+                provide frame(valid) returning a (lat, lon) array on the
+                same grid.
+        """
+        if not loaders:
+            raise ValueError("MultiChannelLoader needs at least one loader.")
+        self.loaders = loaders
+
+    def window(self, times):
+        """
+        Load a temporal window with one channel per loader.
+        Args:
+            times (list): Valid times, datetimes or ISO strings.
+        Returns:
+            numpy array (window, n_channels, lat, lon).
+        """
+        frames = []
+        for t in times:
+            if isinstance(t, str):
+                t = datetime.datetime.fromisoformat(t)
+            frames.append(np.stack([ld.frame(t) for ld in self.loaders]))
+        return np.stack(frames)
