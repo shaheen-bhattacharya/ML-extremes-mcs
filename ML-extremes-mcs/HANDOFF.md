@@ -207,7 +207,20 @@ Monitoring: `qstat -u sbhatta`; job logs stream live (`-k oed` is set);
    tracking on the MCSMIP files the repo's DYAMOND notebooks target. No
    labels there — evaluation is qualitative + statistics comparisons
    (life-cycle distributions vs FLEXTRKR-on-OBS).
-5. **Paper assembly.** LaTeX building blocks live in laptop
+5. **Multi-channel input ablation** (does richer input fix split
+   skill?). The raw archive has everything (verified 2026-08-03):
+   CAPE in `e5.oper.an.sfc` (monthly files, plain hourly time axis),
+   u/v/q in `e5.oper.an.pl` (daily files, `sel(level=850)`),
+   terrain in `e5.oper.invariant`. Spec: an `ERA5AnalysisLoader`
+   sibling class in dataset_inputs.py — simpler than the forecast
+   loader (no init/hour decomposition; locate month/day file, sel
+   time/level, slice box, flip lat) — same `window()` interface so
+   WindowsWithInputs can stack channels; per-variable norm stats via
+   compute_stats. TrackerNet already takes n_channels. IMPORTANT
+   trade-off: multi-channel models cannot transfer to DYAMOND/MCSMIP
+   (OLR+precip only) — keep the 1-channel model as the headline and
+   report multi-channel as a skill-ceiling ablation.
+6. **Paper assembly.** LaTeX building blocks live in laptop
    `sample_data/`: `architecture.tex`, `lemmas.tex`, `tracking_targets_doc.tex`.
    Venue candidates discussed: AMS AIES / JAMES (teacher's community), IEEE
    TGRS (Makris & Prieur lineage), NeurIPS Climate Change AI workshop
