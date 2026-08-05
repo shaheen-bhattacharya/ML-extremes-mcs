@@ -44,6 +44,11 @@ EPOCHS=${EPOCHS:-10}
 STRIDE=${STRIDE:-1}
 MIXING=${MIXING:-none}
 EVENT_WEIGHT=${EVENT_WEIGHT:-1.0}
+CHANNELS=${CHANNELS:-}
+CHANNEL_ARGS=""
+if [ -n "$CHANNELS" ]; then
+    CHANNEL_ARGS="--channels $CHANNELS"
+fi
 RUN_NAME=${RUN_NAME:-v1}
 OUT=/glade/work/sbhatta/mcs_runs/$RUN_NAME
 RESUME=${RESUME:-}
@@ -62,5 +67,5 @@ else
         --train-years "$TRAIN_YEARS" --valid-years "$VALID_YEARS" \
         --epochs "$EPOCHS" --stride "$STRIDE" --workers 8 \
         --temporal-mixing "$MIXING" --event-weight "$EVENT_WEIGHT" \
-        $NORM_ARGS $RESUME_ARGS
+        $NORM_ARGS $RESUME_ARGS $CHANNEL_ARGS
 fi

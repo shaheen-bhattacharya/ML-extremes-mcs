@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import glob
+import json
 import os
 import random
 
@@ -57,26 +58,77 @@ def pad_lat(t, total=7):
     return torch.nn.functional.pad(t, (0, 0, total // 2, total - total // 2))
 
 
+def build_channel_loader(spec):
+    """
+    Build one input-channel loader from a channel spec dict.
+    Args:
+        spec (dict): {'kind': 'forecast'|'analysis', 'dir': <table dir>,
+                      and per-kind options: forecast takes optional
+                      'negate' (default True) and 'difference'; analysis
+                      takes 'var', 'glob', optional 'level' and 'negate'
+                      (default False); both take optional 'mean'/'std'}.
+    Returns:
+        An ERA5ForecastLoader or ERA5AnalysisLoader instance.
+    """
+    kind = spec.get('kind', 'forecast')
+    if kind == 'forecast':
+        return dataset_inputs.ERA5ForecastLoader(
+            spec['dir'],
+            negate=spec.get('negate', True),
+            difference=spec.get('difference', False),
+            mean=spec.get('mean'), std=spec.get('std'),
+        )
+    if kind == 'analysis':
+        return dataset_inputs.ERA5AnalysisLoader(
+            spec['dir'], var=spec['var'], file_glob=spec['glob'],
+            level=spec.get('level'),
+            negate=spec.get('negate', False),
+            mean=spec.get('mean'), std=spec.get('std'),
+        )
+    raise ValueError(f"unknown channel kind: {kind}")
+
+
+def channels_factory(channel_specs):
+    """
+    Build a lazy factory producing a MultiChannelLoader from a list of
+    channel specs (see build_channel_loader). Called per DataLoader
+    worker so cached netCDF handles are never shared across processes.
+    """
+    def factory():
+        return dataset_inputs.MultiChannelLoader(
+            [build_channel_loader(s) for s in channel_specs]
+        )
+    return factory
+
+
 class WindowsWithInputs(Dataset):
     """
     Wraps TemporalMaskDataset, attaching aligned ERA5 input tensors to
-    each window. The ERA5 loader is created lazily per process so its
-    cached netCDF handle is never shared across DataLoader workers.
+    each window. The input loader is created lazily per process so its
+    cached netCDF handles are never shared across DataLoader workers.
     """
 
     def __init__(self, mask_files, era5_dir, window=3, mean=None,
-                 std=None, difference=False, stride=1):
+                 std=None, difference=False, stride=1,
+                 loader_factory=None):
         """
         Initialization.
         Args:
             mask_files (list): mcstrack files; windows form only across
                                exactly-consecutive hours.
-            era5_dir (str): ERA5 forecast-table directory (accumu).
+            era5_dir (str): ERA5 forecast-table directory (accumu),
+                            used by the default single-channel loader.
             window (int): Frames per sample.
-            mean, std (float): z-score constants for the input field.
-            difference (bool): Passed to ERA5ForecastLoader.
+            mean, std (float): z-score constants for the input field
+                               (default loader only).
+            difference (bool): Passed to ERA5ForecastLoader (default
+                               loader only).
             stride (int): Window advance in hours (window - 1 covers
                           each transition exactly once).
+            loader_factory (callable): Optional zero-arg callable
+                returning a loader with window(times); overrides the
+                default single-channel TTR loader (multi-channel
+                training uses channels_factory()).
         """
         self.masks = dataset_temporal.TemporalMaskDataset(
             mask_files, window=window, stride=stride
@@ -85,6 +137,7 @@ class WindowsWithInputs(Dataset):
         self.mean = mean
         self.std = std
         self.difference = difference
+        self.loader_factory = loader_factory
         self._loader = None
 
     def __len__(self):
@@ -93,10 +146,13 @@ class WindowsWithInputs(Dataset):
     @property
     def loader(self):
         if self._loader is None:
-            self._loader = dataset_inputs.ERA5ForecastLoader(
-                self.era5_dir, mean=self.mean, std=self.std,
-                difference=self.difference,
-            )
+            if self.loader_factory is not None:
+                self._loader = self.loader_factory()
+            else:
+                self._loader = dataset_inputs.ERA5ForecastLoader(
+                    self.era5_dir, mean=self.mean, std=self.std,
+                    difference=self.difference,
+                )
         return self._loader
 
     def __getitem__(self, index):
@@ -207,8 +263,21 @@ def main():
     p.add_argument('--smoke', action='store_true',
                    help='tiny end-to-end run: few steps, no epochs loop')
     p.add_argument('--compute-stats', action='store_true',
-                   help='sample training times, print mean/std, exit')
+                   help='sample training times, print mean/std, exit '
+                        '(with --channels: per channel lacking stats)')
+    p.add_argument('--channels', default=None,
+                   help='JSON file listing channel specs for '
+                        'multi-channel input (see build_channel_loader); '
+                        'omitted = single-channel TTR via --era5')
     args = p.parse_args()
+
+    channel_specs = None
+    if args.channels:
+        with open(args.channels) as fh:
+            channel_specs = json.load(fh)
+        print(f"channels: {len(channel_specs)} "
+              f"({[s.get('var', 'TTR') for s in channel_specs]})",
+              flush=True)
 
     train_files = mask_files_for_years(args.mask_root,
                                        parse_years(args.train_years))
@@ -218,23 +287,50 @@ def main():
           f"valid mask files: {len(valid_files)}", flush=True)
 
     if args.compute_stats:
-        loader = dataset_inputs.ERA5ForecastLoader(
-            args.era5, difference=args.difference
-        )
         times = sorted(random.Random(0).sample(
             [dataset_temporal.timestamp_of(f) for f in train_files],
             min(500, len(train_files)),
         ))
-        mean, std = loader.compute_stats(times)
-        print(f"--mean {mean:.6g} --std {std:.6g}")
+        if channel_specs is None:
+            loader = dataset_inputs.ERA5ForecastLoader(
+                args.era5, difference=args.difference
+            )
+            mean, std = loader.compute_stats(times)
+            print(f"--mean {mean:.6g} --std {std:.6g}")
+            return
+        for k, spec in enumerate(channel_specs):
+            if spec.get('mean') is not None and spec.get('std') is not None:
+                print(f"channel {k} ({spec.get('var', 'TTR')}): "
+                      f"stats already set, skipping", flush=True)
+                continue
+            bare = {key: v for key, v in spec.items()
+                    if key not in ('mean', 'std')}
+            mean, std = build_channel_loader(bare).compute_stats(times)
+            print(f'channel {k} ({spec.get("var", "TTR")}): '
+                  f'"mean": {mean:.6g}, "std": {std:.6g}', flush=True)
         return
+
+    if channel_specs is not None:
+        missing = [k for k, s in enumerate(channel_specs)
+                   if s.get('mean') is None or s.get('std') is None]
+        if missing:
+            raise SystemExit(
+                f"channels {missing} lack mean/std -- run "
+                f"--compute-stats --channels first and fill them in"
+            )
+
+    factory = (channels_factory(channel_specs)
+               if channel_specs is not None else None)
+    n_channels = len(channel_specs) if channel_specs is not None else 1
 
     train_ds = WindowsWithInputs(train_files, args.era5, args.window,
                                  args.mean, args.std, args.difference,
-                                 stride=args.stride)
+                                 stride=args.stride,
+                                 loader_factory=factory)
     valid_ds = WindowsWithInputs(valid_files, args.era5, args.window,
                                  args.mean, args.std, args.difference,
-                                 stride=args.stride)
+                                 stride=args.stride,
+                                 loader_factory=factory)
     print(f"train windows: {len(train_ds)} | valid windows: {len(valid_ds)}",
           flush=True)
 
@@ -249,8 +345,10 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print('device:', device, flush=True)
     net = tracker_model.TrackerNet(
-        n_channels=1, n_classes=2, temporal_mixing=args.temporal_mixing
+        n_channels=n_channels, n_classes=2,
+        temporal_mixing=args.temporal_mixing
     ).to(device)
+    print('input channels:', n_channels, flush=True)
     print('temporal mixing:', args.temporal_mixing, flush=True)
 
     if args.init_backbone:

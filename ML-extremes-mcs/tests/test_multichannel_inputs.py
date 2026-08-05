@@ -130,3 +130,41 @@ def test_multichannel_stacks_mixed_loaders(archives, tmp_path):
 def test_multichannel_rejects_empty():
     with pytest.raises(ValueError):
         di.MultiChannelLoader([])
+
+
+def test_channels_factory_and_dataset(archives, tmp_path):
+    import train_tracker as tr
+    from test_train_tracker import write_masks
+    sfc, pl = archives
+    fc = build_archive(str(tmp_path / 'fc2'))
+
+    specs = [
+        {'kind': 'forecast', 'dir': fc, 'negate': False},
+        {'kind': 'analysis', 'dir': sfc, 'var': 'CAPE',
+         'glob': '*_cape.*.nc'},
+        {'kind': 'analysis', 'dir': pl, 'var': 'U',
+         'glob': '*128_131_u.*.nc', 'level': 850},
+    ]
+    mask_dir = tmp_path / 'masks'
+    mask_dir.mkdir()
+    files = write_masks(str(mask_dir))
+
+    ds = tr.WindowsWithInputs(files, era5_dir='unused', window=2,
+                              loader_factory=tr.channels_factory(specs))
+    item = ds[0]
+    assert item['inputs'].shape == (2, 3, 13, 33)
+    # channel identities at 2005-06-05 07:00
+    assert np.allclose(item['inputs'][0, 1].numpy(), 5.07)   # CAPE
+    assert np.allclose(item['inputs'][0, 2].numpy(), 850.07)  # u850
+
+
+def test_build_channel_loader_kinds(archives):
+    import train_tracker as tr
+    sfc, _ = archives
+    ld = tr.build_channel_loader(
+        {'kind': 'analysis', 'dir': sfc, 'var': 'CAPE',
+         'glob': '*_cape.*.nc', 'mean': 1.0, 'std': 2.0})
+    assert isinstance(ld, di.ERA5AnalysisLoader)
+    assert ld.mean == 1.0
+    with pytest.raises(ValueError):
+        tr.build_channel_loader({'kind': 'quantum', 'dir': sfc})

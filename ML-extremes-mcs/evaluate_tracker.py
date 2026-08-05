@@ -289,25 +289,37 @@ def main():
     p.add_argument('--temperature', type=float, default=1.0,
                    help='softmax temperature for association logits '
                         '(fit on validation via --fit-temperature)')
+    p.add_argument('--channels', default=None,
+                   help='JSON channel-spec file; must match the one the '
+                        'checkpoint was trained with')
     p.add_argument('--fit-temperature', action='store_true',
                    help='grid-search T minimizing ECE on --years '
                         '(use validation years!), print best, exit')
     p.add_argument('--out', default='eval_out')
     args = p.parse_args()
 
+    channel_specs = None
+    if args.channels:
+        with open(args.channels) as fh:
+            channel_specs = json.load(fh)
+    factory = (train_tracker.channels_factory(channel_specs)
+               if channel_specs is not None else None)
+    n_channels = len(channel_specs) if channel_specs is not None else 1
+
     files = train_tracker.mask_files_for_years(
         args.mask_root, train_tracker.parse_years(args.years)
     )
     dataset = train_tracker.WindowsWithInputs(
         files, args.era5, args.window, args.mean, args.std,
-        args.difference, stride=args.stride,
+        args.difference, stride=args.stride, loader_factory=factory,
     )
-    print(f"evaluating on {len(files)} files -> {len(dataset)} windows",
-          flush=True)
+    print(f"evaluating on {len(files)} files -> {len(dataset)} windows "
+          f"({n_channels} channel(s))", flush=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     net = tracker_model.TrackerNet(
-        n_channels=1, n_classes=2, temporal_mixing=args.temporal_mixing
+        n_channels=n_channels, n_classes=2,
+        temporal_mixing=args.temporal_mixing
     ).to(device)
     ck = torch.load(args.checkpoint, map_location=device)
     net.load_state_dict(ck['model'] if 'model' in ck else ck)
