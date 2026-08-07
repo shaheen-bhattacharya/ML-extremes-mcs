@@ -207,8 +207,18 @@ Monitoring: `qstat -u sbhatta`; job logs stream live (`-k oed` is set);
    tracking on the MCSMIP files the repo's DYAMOND notebooks target. No
    labels there — evaluation is qualitative + statistics comparisons
    (life-cycle distributions vs FLEXTRKR-on-OBS).
-5. **Multi-channel input ablation** (does richer input fix split
-   skill?). The raw archive has everything (verified 2026-08-03):
+5. **Multi-channel input ablation — RUN, NEGATIVE (2026-08-07).**
+   OLR+CAPE+u/v850 at scout scale (run `ch4`, epoch-3 best): 2017
+   top-1 0.944, split F1 0.137, merge F1 0.136 — worse than the
+   1-channel scout (0.952/0.193/0.180) on every metric; ECE 0.026.
+   Third negative alongside temporal attention and reweighting; only
+   scale helps rare events → residual gap attributed to label
+   ambiguity/intrinsic difficulty. Caveats: scout scale only; a
+   full-scale multi-channel run remains untested. Ops notes: 4-ch
+   training ≈2.4 h/epoch (chain 12 h jobs via RESUME); 4-ch evaluation
+   is serial and needs ≥8 h walltime — adding DataLoader workers to
+   evaluate_tracker's loop is a known TODO; the archive's .zarr copies
+   are the likely real fix for analysis-table I/O. Original spec: The raw archive has everything (verified 2026-08-03):
    CAPE in `e5.oper.an.sfc` (monthly files, plain hourly time axis),
    u/v/q in `e5.oper.an.pl` (daily files, `sel(level=850)`),
    terrain in `e5.oper.invariant`. Spec: an `ERA5AnalysisLoader`
